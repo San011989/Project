@@ -10,9 +10,17 @@ load_dotenv()
 
 app = FastAPI()
 
+# Restrict origins in production to your live frontend URL
+origins = [
+    "https://project-2q48.onrender.com",
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "*"
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://project-2q48.onrender.com"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -84,6 +92,11 @@ Relevant context retrieved from Sanjeev's resume:
 ---
 {context}
 ---"""
+
+@app.get("/")
+def read_root():
+    """Root endpoint to handle Render health checks."""
+    return {"status": "ok", "message": "Sanjeev's Portfolio API is running"}
 
 @app.post("/api/chat")
 async def chat_endpoint(req: ChatRequest):
