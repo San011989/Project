@@ -5,6 +5,10 @@ This avoids any httpx/httpx2 dependency issues by using the requests library dir
 import os
 import requests
 import chromadb
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+DB_DIR = BASE_DIR / "chroma_db"
 from dotenv import load_dotenv
 
 load_dotenv()
