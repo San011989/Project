@@ -5,7 +5,10 @@ import os
 import requests
 import chromadb
 from dotenv import load_dotenv
+from pathlib import Path
 
+BASE_DIR = Path(__file__).resolve().parent
+DB_DIR = BASE_DIR / "chroma_db"
 load_dotenv()
 
 app = FastAPI()
