@@ -21,7 +21,7 @@ load_dotenv(BASE_DIR / ".env")
 DB_DIR.mkdir(parents=True, exist_ok=True)
 
 EMBEDDING_MODEL = "text-embedding-3-small"
-CHAT_MODEL = "gpt-3.5-turbo"
+CHAT_MODEL = os.getenv("CHAT_MODEL", "gpt-4.1-mini")
 
 COLLECTION_NAME = "resume_data"
 
