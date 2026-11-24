@@ -1,44 +1,50 @@
+
 """
-init_db.py - Populate ChromaDB with resume chunks using raw requests for embeddings.
-This avoids any httpx/httpx2 dependency issues by using the requests library directly.
+init_db.py
+Populate ChromaDB with Sanjeev Kumar's resume chunks.
+
+Uses:
+- OpenAI text-embedding-3-small
+- requests for embedding generation
+- ChromaDB persistent storage
 """
+
 import os
 import requests
 import chromadb
-from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent
-DB_DIR = BASE_DIR / "chroma_db"
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+# ==========================================
+# 1. PATH CONFIGURATION
+# ==========================================
+
+BASE_DIR = Path(__file__).resolve().parent
+
+# Use exactly the same path as backend/main.py
+DB_DIR = BASE_DIR / "chroma_db"
+
+DB_DIR.mkdir(parents=True, exist_ok=True)
+
+# Load environment variables from backend/.env locally.
+# On Render, environment variables are supplied through the dashboard.
+load_dotenv(BASE_DIR / ".env")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
 if not OPENAI_API_KEY:
-    raise ValueError("OPENAI_API_KEY is missing from .env file.")
+    raise ValueError(
+        "OPENAI_API_KEY is missing. "
+        "Configure it in your .env file or Render environment variables."
+    )
 
 EMBEDDING_MODEL = "text-embedding-3-small"
+COLLECTION_NAME = "resume_data"
 
-def get_embeddings(texts: list[str]) -> list[list[float]]:
-    """Call OpenAI embeddings API directly via requests."""
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "input": texts,
-        "model": EMBEDDING_MODEL
-    }
-    response = requests.post(
-        "https://api.openai.com/v1/embeddings",
-        headers=headers,
-        json=payload,
-        timeout=60
-    )
-    response.raise_for_status()
-    data = response.json()
-    embeddings = [item["embedding"] for item in sorted(data["data"], key=lambda x: x["index"])]
-    return embeddings
+# ==========================================
+# 2. RESUME CHUNKS
+# ==========================================
 
 chunks = [
     {
@@ -119,34 +125,153 @@ Machine Learning, Deep Learning, NLP, Generative AI & LLMs, Python (Pandas, NumP
     }
 ]
 
+# ==========================================
+# 3. GENERATE OPENAI EMBEDDINGS
+# ==========================================
+
+def get_embeddings(texts: list[str]) -> list[list[float]]:
+    """Generate embeddings using the OpenAI API."""
+
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "input": texts,
+        "model": EMBEDDING_MODEL
+    }
+
+    response = requests.post(
+        "https://api.openai.com/v1/embeddings",
+        headers=headers,
+        json=payload,
+        timeout=60
+    )
+
+    if not response.ok:
+        raise RuntimeError(
+            f"OpenAI embedding error: "
+            f"{response.status_code} - {response.text}"
+        )
+
+    data = response.json()["data"]
+
+    # Preserve the original input order
+    embeddings = [
+        item["embedding"]
+        for item in sorted(data, key=lambda x: x["index"])
+    ]
+
+    if len(embeddings) != len(texts):
+        raise RuntimeError(
+            f"Expected {len(texts)} embeddings, "
+            f"but received {len(embeddings)}."
+        )
+
+    return embeddings
+
+
+# ==========================================
+# 4. INITIALIZE CHROMADB
+# ==========================================
+
 def main():
-    print("Generating embeddings via OpenAI API (using requests)...")
-    texts = [c["text"] for c in chunks]
+
+    print("\n====================================")
+    print("SANJEEV RESUME RAG DATABASE SETUP")
+    print("====================================")
+
+    print("\nDatabase directory:", DB_DIR)
+
+    # Step 1: Generate embeddings
+    print("\nStep 1: Generating OpenAI embeddings...")
+
+    texts = [chunk["text"] for chunk in chunks]
+
     embeddings = get_embeddings(texts)
-    print(f"Got {len(embeddings)} embeddings. Dimension: {len(embeddings[0])}")
 
-    print("Initializing ChromaDB (persistent)...")
-    chroma_client = chromadb.PersistentClient(path="./chroma_db")
+    print("Embeddings generated:", len(embeddings))
+    print("Embedding dimension:", len(embeddings[0]))
 
-    existing = [c.name for c in chroma_client.list_collections()]
-    if "resume_data" in existing:
-        print("Deleting existing 'resume_data' collection...")
-        chroma_client.delete_collection("resume_data")
+    # Step 2: Connect to ChromaDB
+    print("\nStep 2: Initializing ChromaDB...")
+
+    chroma_client = chromadb.PersistentClient(
+        path=str(DB_DIR)
+    )
+
+    # Step 3: Remove existing collection if present
+    existing = [
+        collection.name
+        for collection in chroma_client.list_collections()
+    ]
+
+    if COLLECTION_NAME in existing:
+
+        print("\nExisting collection found.")
+        print("Deleting old collection...")
+
+        chroma_client.delete_collection(
+            name=COLLECTION_NAME
+        )
+
+    # Step 4: Create collection
+    print("\nStep 3: Creating collection...")
 
     collection = chroma_client.create_collection(
-        name="resume_data",
+        name=COLLECTION_NAME,
         metadata={"hnsw:space": "cosine"}
     )
 
-    print(f"Adding {len(chunks)} chunks to ChromaDB...")
+    # Step 5: Insert documents and embeddings
+    print("\nStep 4: Inserting resume chunks...")
+
     collection.add(
         documents=texts,
         embeddings=embeddings,
-        ids=[c["id"] for c in chunks]
+        ids=[chunk["id"] for chunk in chunks],
+        metadatas=[
+            {"section": chunk["id"]}
+            for chunk in chunks
+        ]
     )
 
-    print(f"\nDone! {len(chunks)} resume chunks stored in ChromaDB.")
-    print("ChromaDB is ready at ./chroma_db")
+    # Step 6: Verify collection
+    print("\nStep 5: Verifying database...")
+
+    total_chunks = collection.count()
+
+    print("Collection name:", collection.name)
+    print("Total chunks stored:", total_chunks)
+
+    if total_chunks != len(chunks):
+        raise RuntimeError(
+            f"Database verification failed. "
+            f"Expected {len(chunks)}, got {total_chunks}."
+        )
+
+    # Step 7: Display stored chunks
+    stored = collection.get(
+        include=["documents", "metadatas"]
+    )
+
+    for index, chunk_id in enumerate(stored["ids"]):
+
+        print(f"\nChunk {index + 1}: {chunk_id}")
+        print("Section:", stored["metadatas"][index]["section"])
+        print("Content:", stored["documents"][index][:200])
+
+    print("\n====================================")
+    print("DATABASE INITIALIZATION SUCCESSFUL")
+    print(f"Total chunks: {total_chunks}")
+    print("Database path:", DB_DIR)
+    print("====================================")
+
+
+# ==========================================
+# 5. RUN SCRIPT
+# ==========================================
 
 if __name__ == "__main__":
     main()
